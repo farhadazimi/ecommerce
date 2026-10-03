@@ -1,0 +1,11 @@
+# Internal only: reachable from the backend pods (see networkpolicy.yaml), never via Ingress.
+apiVersion: v1
+kind: Service
+metadata:
+  name: order-service
+  labels: {app.kubernetes.io/name: order-service}
+spec:
+  type: ClusterIP
+  selector: {app.kubernetes.io/name: order-service}
+  ports:
+    - {name: http, port: 8001, targetPort: http, protocol: TCP}

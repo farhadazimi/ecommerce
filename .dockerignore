@@ -1,0 +1,18 @@
+# Build context is the repo root for the Python services; keep it small and secret-free.
+.git
+.venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+.ruff_cache
+.coverage
+htmlcov
+frontend/node_modules
+frontend/dist
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env.*.example
+infrastructure/kubernetes/**/secrets.local.yaml
+*.log
+**/*.egg-info

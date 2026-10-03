@@ -1,0 +1,24 @@
+# External path: DNS -> Anti-DDoS -> CFW -> WAF -> ELB -> Ingress -> Services.
+# TLS terminates at the ELB/WAF (or here); the apps read X-Forwarded-Proto/-For/-Host.
+# /api -> Backend API, everything else -> SPA. /metrics and the Order Service are not exposed.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ecommerce
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "6m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "30"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: shop.example.com
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service: {name: backend, port: {number: 8000}}
+          - path: /
+            pathType: Prefix
+            backend:
+              service: {name: frontend, port: {number: 80}}

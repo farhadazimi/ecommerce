@@ -1,0 +1,28 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: ecommerce
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: ecommerce
+      app.kubernetes.io/managed-by: kustomize
+    includeSelectors: false
+resources:
+  - namespace.yaml
+  - serviceaccount.yaml
+  - configmap.yaml
+  # secrets.yaml is a TEMPLATE - the Secret is created out-of-band (CI variables / kubectl)
+  - backend-deployment.yaml
+  - backend-service.yaml
+  - order-deployment.yaml
+  - order-service.yaml
+  - frontend-deployment.yaml
+  - frontend-service.yaml
+  - ingress.yaml
+  - hpa.yaml
+  - pdb.yaml
+  - networkpolicy.yaml
+  - migration-job.yaml
+images:
+  - {name: ecommerce-backend, newName: ecommerce-backend, newTag: latest}
+  - {name: ecommerce-order-service, newName: ecommerce-order-service, newTag: latest}
+  - {name: ecommerce-frontend, newName: ecommerce-frontend, newTag: latest}

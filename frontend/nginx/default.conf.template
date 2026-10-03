@@ -1,0 +1,64 @@
+# Frontend SPA server. Rendered at container start by the nginx image's envsubst step
+# (only API_BASE_URL, APP_ENV, CSP_CONNECT_SRC and CSP_IMG_SRC are substituted).
+# TLS terminates at the ELB/WAF; the Kubernetes Ingress forwards plain HTTP to port 8080.
+
+log_format json_access escape=json
+  '{"timestamp":"$time_iso8601","service":"frontend","remote_addr":"$remote_addr",'
+  '"x_forwarded_for":"$http_x_forwarded_for","x_forwarded_proto":"$http_x_forwarded_proto",'
+  '"request_id":"$http_x_request_id","method":"$request_method","path":"$uri","status":$status,'
+  '"bytes":$body_bytes_sent,"duration_ms":$request_time,"user_agent":"$http_user_agent"}';
+
+server {
+    listen 8080;
+    server_name _;
+    server_tokens off;
+    root /usr/share/nginx/html;
+    index index.html;
+
+    access_log /dev/stdout json_access;
+    error_log /dev/stderr warn;
+
+    gzip on;
+    gzip_comp_level 5;
+    gzip_min_length 1024;
+    gzip_types text/css application/javascript application/json image/svg+xml text/plain;
+
+    client_max_body_size 1m;
+
+    include /etc/nginx/conf.d/security-headers.inc;
+
+    # liveness/readiness for Kubernetes and ELB health checks
+    location = /health {
+        access_log off;
+        default_type application/json;
+        add_header Cache-Control "no-store";
+        return 200 '{"status":"ok","service":"frontend"}';
+    }
+
+    # runtime configuration generated from environment variables (never cached)
+    location = /config.js {
+        default_type application/javascript;
+        add_header Cache-Control "no-store";
+        include /etc/nginx/conf.d/security-headers.inc;
+        return 200 'window.__APP_CONFIG__={"API_BASE_URL":"${API_BASE_URL}","APP_ENV":"${APP_ENV}"};';
+    }
+
+    # fingerprinted build assets: cache forever
+    location /assets/ {
+        add_header Cache-Control "public, max-age=31536000, immutable";
+        include /etc/nginx/conf.d/security-headers.inc;
+        try_files $uri =404;
+    }
+
+    location = /index.html {
+        add_header Cache-Control "no-cache";
+        include /etc/nginx/conf.d/security-headers.inc;
+    }
+
+    # SPA fallback: client-side routes resolve to index.html
+    location / {
+        add_header Cache-Control "no-cache";
+        include /etc/nginx/conf.d/security-headers.inc;
+        try_files $uri /index.html;
+    }
+}

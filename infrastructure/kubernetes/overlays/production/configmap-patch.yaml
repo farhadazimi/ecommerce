@@ -1,0 +1,28 @@
+# Replace every REPLACE_ME with the private endpoints created in the Database Subnet / OBS.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ecommerce-config
+data:
+  APP_ENV: "production"
+  DATABASE_HOST: "REPLACE_ME_RDS_PRIVATE_IP_OR_DNS"     # e.g. 10.0.3.x
+  DATABASE_NAME: "ecommerce"
+  DATABASE_USER: "ecommerce_app"
+  REDIS_HOST: "REPLACE_ME_DCS_PRIVATE_IP_OR_DNS"        # e.g. 10.0.3.y
+  OBS_ENDPOINT: "https://REPLACE_ME_OBS_ENDPOINT"
+  OBS_REGION: "REPLACE_ME_REGION"
+  OBS_BUCKET_IMAGES: "ecommerce-images"
+  OBS_BUCKET_INVOICES: "ecommerce-invoices"
+  CORS_ORIGINS: "https://REPLACE_ME_SHOP_DOMAIN"
+  TRUSTED_PROXIES: "10.0.0.0/16,172.16.0.0/12"          # VPC + container network
+  EXPOSE_API_DOCS: "false"
+  NOTIFICATION_BACKEND: "log"                            # "webhook" + SMN_WEBHOOK_URL to publish to SMN
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: frontend-config
+data:
+  API_BASE_URL: ""
+  APP_ENV: "production"
+  CSP_IMG_SRC: "https://REPLACE_ME_IMAGES_BUCKET_HOST"

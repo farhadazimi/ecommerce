@@ -1,0 +1,7 @@
+# Backend API runtime dependencies (ecommerce-common is installed from libs/common)
+fastapi==0.115.12
+uvicorn[standard]==0.34.2
+python-multipart==0.0.20
+email-validator==2.2.0
+Pillow==11.2.1
+alembic==1.15.2

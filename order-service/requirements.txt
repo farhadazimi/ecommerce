@@ -1,0 +1,4 @@
+# Order Service runtime dependencies (ecommerce-common is installed from libs/common)
+fastapi==0.115.12
+uvicorn[standard]==0.34.2
+reportlab==4.4.1

@@ -1,0 +1,40 @@
+# Workspace-level tooling configuration (the services are packaged individually).
+[tool.pytest.ini_options]
+pythonpath = [".", "backend", "order-service", "libs/common", "database/seed"]
+testpaths = ["tests/unit", "backend/tests", "order-service/tests", "tests/integration"]
+addopts = "-ra --strict-markers"
+markers = [
+    "e2e: end-to-end tests against a running deployment (E2E_BASE_URL)",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning:botocore.*",
+    "ignore::DeprecationWarning:passlib.*",
+]
+
+[tool.coverage.run]
+source = ["backend/backend_api", "order-service/order_service", "libs/common/ecommerce_common"]
+omit = ["*/bootstrap.py"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+extend-exclude = ["database/migrations/versions", "frontend"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "BLE", "C4", "SIM"]
+ignore = [
+    "B008",   # FastAPI Depends() in defaults is idiomatic
+    "S101",   # assert is used in tests and for invariants
+    "S105", "S106", # false positives on names like *_token / dev defaults guarded by config validation
+    "SIM108",
+    "E501",   # formatter handles long lines; some data tables are intentionally wide
+    "UP040",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/**" = ["S", "BLE"]
+"tests/**" = ["S", "BLE"]
+"conftest.py" = ["S"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["ecommerce_common", "backend_api", "order_service"]

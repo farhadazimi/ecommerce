@@ -1,0 +1,53 @@
+# kind / minikube: full stack incl. in-cluster stand-ins for RDS/DCS/OBS.
+#   make kind-up    (creates the cluster, builds + loads images, deploys, runs e2e)
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: ecommerce
+resources:
+  - ../../base
+  - infra/local-services.yaml
+  - infra/jobs.yaml
+secretGenerator:
+  - name: ecommerce-secrets
+    options: {disableNameSuffixHash: true}
+    literals:  # development-only values
+      - DATABASE_PASSWORD=local-kind-db-password
+      - REDIS_PASSWORD=local-kind-redis-password
+      - OBS_ACCESS_KEY=localkindaccesskey
+      - OBS_SECRET_KEY=local-kind-obs-secret-key
+      - JWT_SECRET=local-kind-jwt-secret-not-for-production-0001
+      - INTERNAL_SERVICE_TOKEN=local-kind-internal-token-0001
+      - SMN_WEBHOOK_TOKEN=
+patches:
+  - target: {kind: ConfigMap, name: ecommerce-config}
+    patch: |-
+      - {op: replace, path: /data/APP_ENV, value: development}
+      - {op: replace, path: /data/DATABASE_HOST, value: mysql}
+      - {op: replace, path: /data/REDIS_HOST, value: redis}
+      - {op: replace, path: /data/OBS_ENDPOINT, value: "http://object-storage:8333"}
+      - {op: add, path: /data/OBS_PUBLIC_ENDPOINT, value: "http://objects.localtest.me"}
+      - {op: replace, path: /data/OBS_REGION, value: us-east-1}
+      - {op: replace, path: /data/OBS_ADDRESSING_STYLE, value: path}
+      - {op: replace, path: /data/COOKIE_SECURE, value: "false"}
+      - {op: replace, path: /data/CORS_ORIGINS, value: "http://shop.localtest.me"}
+      - {op: add, path: /data/PUBLIC_BASE_URL, value: "http://shop.localtest.me"}
+  - target: {kind: ConfigMap, name: frontend-config}
+    patch: |-
+      - {op: replace, path: /data/APP_ENV, value: development}
+      - {op: replace, path: /data/CSP_IMG_SRC, value: "http://objects.localtest.me"}
+  - target: {kind: Ingress, name: ecommerce}
+    patch: |-
+      - {op: replace, path: /spec/rules/0/host, value: shop.localtest.me}
+  - target: {kind: Deployment, name: "(backend|order-service|frontend)"}
+    patch: |-
+      - {op: replace, path: /spec/replicas, value: 1}
+  - target: {kind: HorizontalPodAutoscaler}
+    patch: |-
+      - {op: replace, path: /spec/minReplicas, value: 1}
+  - target: {kind: Namespace, name: ecommerce}
+    patch: |-
+      - {op: replace, path: /metadata/labels/pod-security.kubernetes.io~1enforce, value: baseline}
+images:
+  - {name: ecommerce-backend, newName: local/ecommerce-backend, newTag: dev}
+  - {name: ecommerce-order-service, newName: local/ecommerce-order-service, newTag: dev}
+  - {name: ecommerce-frontend, newName: local/ecommerce-frontend, newTag: dev}

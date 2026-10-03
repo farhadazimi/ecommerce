@@ -1,0 +1,146 @@
+# Local development stack - mirrors the Phase 1 topology with local stand-ins:
+#   RDS MySQL -> mysql | DCS Redis -> redis | OBS -> SeaweedFS (S3 API) | Ingress/ELB -> published ports
+#
+#   cp .env.example .env      # optional - every value has a safe local default
+#   docker compose up -d --build
+#   open http://localhost:8080  (API docs: http://localhost:8000/api/docs)
+#
+# Data volumes here are for local convenience only; in the cloud all state lives in RDS/DCS/OBS.
+name: ecommerce
+
+x-app-env: &app-env
+  APP_ENV: ${APP_ENV:-development}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  DATABASE_HOST: mysql
+  DATABASE_PORT: "3306"
+  DATABASE_NAME: ${DATABASE_NAME:-ecommerce}
+  DATABASE_USER: ${DATABASE_USER:-ecommerce}
+  DATABASE_PASSWORD: ${DATABASE_PASSWORD:-local-dev-db-password}
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  REDIS_PASSWORD: ${REDIS_PASSWORD:-local-dev-redis-password}
+  REDIS_REQUIRED: "true"
+  STORAGE_BACKEND: s3
+  OBS_ENDPOINT: http://object-storage:8333
+  OBS_PUBLIC_ENDPOINT: ${OBS_PUBLIC_ENDPOINT:-http://localhost:8333}
+  OBS_BUCKET_IMAGES: ${OBS_BUCKET_IMAGES:-ecommerce-images}
+  OBS_BUCKET_INVOICES: ${OBS_BUCKET_INVOICES:-ecommerce-invoices}
+  OBS_ACCESS_KEY: ${OBS_ACCESS_KEY:-localdevaccesskey}
+  OBS_SECRET_KEY: ${OBS_SECRET_KEY:-local-dev-secret-key-123}
+  OBS_REGION: ${OBS_REGION:-us-east-1}
+  OBS_ADDRESSING_STYLE: path
+  JWT_SECRET: ${JWT_SECRET:-local-development-jwt-secret-please-override-0001}
+  INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-local-development-internal-token-0001}
+  ORDER_SERVICE_URL: http://order-service:8001
+  CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080,http://localhost:5173}
+  PUBLIC_BASE_URL: http://localhost:8000
+  COOKIE_SECURE: "false"
+  TRUSTED_PROXIES: 172.16.0.0/12,127.0.0.1/32
+  NOTIFICATION_BACKEND: log
+
+services:
+  mysql:
+    image: mysql:8.0
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_0900_ai_ci", "--slow-query-log=ON", "--long-query-time=1"]
+    environment:
+      MYSQL_DATABASE: ${DATABASE_NAME:-ecommerce}
+      MYSQL_USER: ${DATABASE_USER:-ecommerce}
+      MYSQL_PASSWORD: ${DATABASE_PASSWORD:-local-dev-db-password}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-local-dev-root-password}
+    volumes: [mysql-data:/var/lib/mysql]
+    ports: ["127.0.0.1:3307:3306"]
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$$MYSQL_USER -p$$MYSQL_PASSWORD --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["sh", "-c", "exec redis-server --requirepass \"$$REDIS_PASSWORD\" --appendonly yes --maxmemory 128mb --maxmemory-policy allkeys-lru"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-local-dev-redis-password}
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$REDIS_PASSWORD\" redis-cli ping | grep PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  object-storage:  # S3-compatible stand-in for Pardis Cloud OBS
+    image: chrislusf/seaweedfs:4.48
+    command: ["mini", "-dir=/data"]
+    environment:
+      AWS_ACCESS_KEY_ID: ${OBS_ACCESS_KEY:-localdevaccesskey}
+      AWS_SECRET_ACCESS_KEY: ${OBS_SECRET_KEY:-local-dev-secret-key-123}
+    volumes: [object-data:/data]
+    ports: ["8333:8333"]  # browsers download product images / invoices via pre-signed URLs
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8333/healthz || wget -q -S -O /dev/null http://127.0.0.1:8333/ 2>&1 | grep -q 'HTTP/'"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
+
+  storage-init:  # creates the buckets on the emulator (OBS buckets are provisioned by the platform team)
+    image: ${IMAGE_REGISTRY:-local}/ecommerce-backend:${IMAGE_TAG:-dev}
+    build: {context: ., dockerfile: backend/Dockerfile}
+    command: ["python", "-m", "ecommerce_common.storage.bootstrap"]
+    environment: *app-env
+    depends_on:
+      object-storage: {condition: service_healthy}
+    restart: "no"
+
+  migrate:  # alembic migrations (+ demo data when SEED_DEMO_DATA=true); same pattern as the K8s Job
+    image: ${IMAGE_REGISTRY:-local}/ecommerce-backend:${IMAGE_TAG:-dev}
+    command: ["sh", "-c", "cd database && alembic upgrade head && if [ \"$$SEED_DEMO_DATA\" = \"true\" ]; then python seed/seed.py; fi"]
+    environment:
+      <<: *app-env
+      SEED_DEMO_DATA: ${SEED_DEMO_DATA:-true}
+    depends_on:
+      mysql: {condition: service_healthy}
+      storage-init: {condition: service_completed_successfully}
+    restart: "no"
+
+  backend:
+    image: ${IMAGE_REGISTRY:-local}/ecommerce-backend:${IMAGE_TAG:-dev}
+    environment: *app-env
+    ports: ["8000:8000"]
+    read_only: true
+    tmpfs: [/tmp]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+      order-service: {condition: service_healthy}
+    restart: unless-stopped
+
+  order-service:
+    image: ${IMAGE_REGISTRY:-local}/ecommerce-order-service:${IMAGE_TAG:-dev}
+    build: {context: ., dockerfile: order-service/Dockerfile}
+    environment: *app-env
+    expose: ["8001"]  # internal only, like the ClusterIP service in Kubernetes
+    read_only: true
+    tmpfs: [/tmp]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+    restart: unless-stopped
+
+  frontend:
+    image: ${IMAGE_REGISTRY:-local}/ecommerce-frontend:${IMAGE_TAG:-dev}
+    build: {context: ./frontend}
+    environment:
+      API_BASE_URL: ${FRONTEND_API_BASE_URL:-http://localhost:8000}
+      APP_ENV: ${APP_ENV:-development}
+      CSP_CONNECT_SRC: ${FRONTEND_CSP_CONNECT_SRC:-http://localhost:8000}
+      CSP_IMG_SRC: ${FRONTEND_CSP_IMG_SRC:-http://localhost:8000 http://localhost:8333}
+    ports: ["8080:8080"]
+    read_only: true
+    tmpfs: ["/tmp", "/etc/nginx/conf.d:uid=101,gid=101"]
+    depends_on:
+      backend: {condition: service_healthy}
+    restart: unless-stopped
+
+volumes:
+  mysql-data:
+  object-data:

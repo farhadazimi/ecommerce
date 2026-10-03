@@ -1,0 +1,44 @@
+# LOCAL ONLY: create the buckets on the emulator and load demo data.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: storage-init
+  labels: {app.kubernetes.io/name: storage-init, app.kubernetes.io/component: migration}
+spec:
+  backoffLimit: 10
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: storage-init, app.kubernetes.io/part-of: ecommerce}
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 10001, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: init
+          image: ecommerce-backend
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "ecommerce_common.storage.bootstrap"]
+          envFrom: [{configMapRef: {name: ecommerce-config}}, {secretRef: {name: ecommerce-secrets}}]
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: ["ALL"]}}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-seed
+  labels: {app.kubernetes.io/name: db-seed, app.kubernetes.io/component: seed}
+spec:
+  backoffLimit: 5
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: db-seed, app.kubernetes.io/part-of: ecommerce}
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 10001, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: seed
+          image: ecommerce-backend
+          imagePullPolicy: IfNotPresent
+          command: ["python", "database/seed/seed.py"]
+          envFrom: [{configMapRef: {name: ecommerce-config}}, {secretRef: {name: ecommerce-secrets}}]
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: ["ALL"]}}

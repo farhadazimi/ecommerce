@@ -1,0 +1,58 @@
+# Non-secret configuration shared by the Backend API and Order Service.
+# Endpoints of the managed services (RDS / DCS / OBS) are overridden per overlay.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ecommerce-config
+data:
+  APP_ENV: "production"
+  LOG_LEVEL: "INFO"
+  LOG_JSON: "true"
+  # ---- RDS MySQL (Database Subnet 10.0.3.0/24) ----
+  DATABASE_HOST: "rds-mysql.ecommerce.internal"
+  DATABASE_PORT: "3306"
+  DATABASE_NAME: "ecommerce"
+  DATABASE_USER: "ecommerce_app"
+  DATABASE_POOL_SIZE: "10"
+  DATABASE_MAX_OVERFLOW: "10"
+  DATABASE_POOL_RECYCLE: "1800"
+  # ---- DCS Redis (Database Subnet 10.0.3.0/24) ----
+  REDIS_HOST: "dcs-redis.ecommerce.internal"
+  REDIS_PORT: "6379"
+  REDIS_REQUIRED: "true"
+  # ---- OBS ----
+  STORAGE_BACKEND: "s3"
+  OBS_ENDPOINT: "https://obs.REGION.pardiscloud.example"
+  OBS_BUCKET_IMAGES: "ecommerce-images"
+  OBS_BUCKET_INVOICES: "ecommerce-invoices"
+  OBS_REGION: "REGION"
+  OBS_ADDRESSING_STYLE: "virtual"
+  OBS_SIGNED_URL_TTL: "3600"
+  # ---- HTTP / security ----
+  COOKIE_SECURE: "true"
+  COOKIE_SAMESITE: "lax"
+  CORS_ORIGINS: "https://shop.example.com"
+  # Only the ingress controller / ELB may set X-Forwarded-* (pod + VPC CIDRs)
+  TRUSTED_PROXIES: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+  RATE_LIMIT_ENABLED: "true"
+  RATE_LIMIT_DEFAULT_PER_MINUTE: "300"
+  RATE_LIMIT_AUTH_PER_MINUTE: "20"
+  EXPOSE_API_DOCS: "true"
+  # ---- service discovery (Kubernetes DNS, never Pod IPs) ----
+  ORDER_SERVICE_URL: "http://order-service:8001"
+  ORDER_SERVICE_TIMEOUT: "10"
+  # ---- notifications / business ----
+  NOTIFICATION_BACKEND: "log"
+  CURRENCY: "USD"
+  ORDER_PAYMENT_TIMEOUT_MINUTES: "30"
+---
+# Runtime configuration of the SPA (rendered into /config.js by nginx at start-up).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: frontend-config
+data:
+  API_BASE_URL: ""            # same origin: the Ingress routes /api to the backend
+  APP_ENV: "production"
+  CSP_CONNECT_SRC: ""
+  CSP_IMG_SRC: "https://*.obs.REGION.pardiscloud.example"

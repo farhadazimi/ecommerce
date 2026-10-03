@@ -1,0 +1,56 @@
+# East-west control inside the cluster (complements VPC security groups: CCE-SG, RDS-SG, DCS-SG).
+# 1) deny all ingress by default
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: default-deny-ingress}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+# 2) frontend + backend accept traffic from the ingress controller / ELB (VPC) only
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: allow-web-from-ingress}
+spec:
+  podSelector:
+    matchExpressions:
+      - {key: app.kubernetes.io/name, operator: In, values: [frontend, backend]}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: ingress-nginx}
+        - ipBlock: {cidr: 10.0.0.0/16}   # Phase 1 VPC (ELB forwards from inside the VPC)
+      ports:
+        - {port: 8080, protocol: TCP}
+        - {port: 8000, protocol: TCP}
+---
+# 3) the order service is internal: only the Backend API may call it
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: allow-order-service-from-backend}
+spec:
+  podSelector: {matchLabels: {app.kubernetes.io/name: order-service}}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: {matchLabels: {app.kubernetes.io/name: backend}}
+      ports:
+        - {port: 8001, protocol: TCP}
+---
+# 4) metrics scraping from the monitoring namespace (CCE cloud-native monitoring / Prometheus)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: allow-metrics-scrape}
+spec:
+  podSelector:
+    matchExpressions:
+      - {key: app.kubernetes.io/name, operator: In, values: [backend, order-service]}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: monitoring}
+      ports:
+        - {port: 8000, protocol: TCP}
+        - {port: 8001, protocol: TCP}

@@ -1,0 +1,31 @@
+# Pardis Cloud CCE - production (Phase 1 single VPC).
+# Before applying, the pipeline:
+#   1. sets the image references:   kustomize edit set image ecommerce-backend=$REGISTRY/ecommerce-backend:$TAG ...
+#   2. creates/updates the Secret `ecommerce-secrets` from protected CI/CD variables
+#   3. runs scripts/k8s-deploy.sh production  (migration Job first, then rollout)
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: ecommerce
+resources:
+  - ../../base
+patches:
+  - path: configmap-patch.yaml
+  - path: ingress-patch.yaml
+  - target: {kind: Ingress, name: ecommerce}
+    patch: |-
+      - {op: replace, path: /spec/rules/0/host, value: REPLACE_ME_SHOP_DOMAIN}
+  - target: {kind: Deployment, name: "(backend|order-service|frontend)"}
+    patch: |-
+      - {op: replace, path: /spec/replicas, value: 3}
+      - {op: replace, path: /spec/template/spec/containers/0/imagePullPolicy, value: Always}
+  - target: {kind: HorizontalPodAutoscaler, name: "(backend|order-service)"}
+    patch: |-
+      - {op: replace, path: /spec/minReplicas, value: 3}
+  # ELB-backed CCE ingress forwards to NodePorts on the CCE nodes (document §5.2 / §11.2 step 7)
+  - target: {kind: Service, name: "(backend|frontend)"}
+    patch: |-
+      - {op: replace, path: /spec/type, value: NodePort}
+images:
+  - {name: ecommerce-backend, newName: swr.REGION.pardiscloud.example/ORG/ecommerce-backend, newTag: "1.0.0"}
+  - {name: ecommerce-order-service, newName: swr.REGION.pardiscloud.example/ORG/ecommerce-order-service, newTag: "1.0.0"}
+  - {name: ecommerce-frontend, newName: swr.REGION.pardiscloud.example/ORG/ecommerce-frontend, newTag: "1.0.0"}

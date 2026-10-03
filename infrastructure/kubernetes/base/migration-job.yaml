@@ -1,0 +1,52 @@
+# Schema migrations run once per deployment, before the new pods roll out
+# (scripts/k8s-deploy.sh applies resources labelled component=migration first and waits).
+# The Job name is fixed; the deploy script deletes the previous Job before applying.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-migrate
+  labels:
+    app.kubernetes.io/name: db-migrate
+    app.kubernetes.io/component: migration
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: db-migrate
+        app.kubernetes.io/component: migration
+        app.kubernetes.io/part-of: ecommerce
+    spec:
+      restartPolicy: Never
+      serviceAccountName: ecommerce-app
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: migrate
+          image: ecommerce-backend
+          imagePullPolicy: IfNotPresent
+          workingDir: /app/database
+          command: ["alembic", "upgrade", "head"]
+          envFrom:
+            - configMapRef: {name: ecommerce-config}
+            - secretRef: {name: ecommerce-secrets}
+          env:
+            - {name: SERVICE_NAME, value: db-migrate}
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: 16Mi}

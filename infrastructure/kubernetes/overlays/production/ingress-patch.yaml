@@ -1,0 +1,19 @@
+# CCE ELB Ingress (Huawei-Cloud-compatible annotations used by CCE). VERIFY the annotation
+# names and values against the Pardis Cloud CCE documentation for your cluster version.
+# Alternative: keep ingressClassName "nginx" (base) with the nginx-ingress add-on exposed
+# through the ELB via a LoadBalancer Service.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ecommerce
+  annotations:
+    kubernetes.io/elb.class: union
+    kubernetes.io/elb.id: "REPLACE_ME_ELB_ID"
+    kubernetes.io/elb.port: "443"
+    kubernetes.io/elb.health-check-flag: "on"
+    kubernetes.io/elb.tls-ciphers-policy: tls-1-2-strict   # TLS 1.2+ (document §13.1)
+spec:
+  ingressClassName: cce
+  tls:
+    - hosts: ["REPLACE_ME_SHOP_DOMAIN"]
+      secretName: shop-tls            # IngressTLS secret, or use an ELB-managed certificate

@@ -1,0 +1,21 @@
+# Keep at least one replica of every tier during node drains / CCE upgrades.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: backend}
+spec:
+  minAvailable: 1
+  selector: {matchLabels: {app.kubernetes.io/name: backend}}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: order-service}
+spec:
+  minAvailable: 1
+  selector: {matchLabels: {app.kubernetes.io/name: order-service}}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: frontend}
+spec:
+  minAvailable: 1
+  selector: {matchLabels: {app.kubernetes.io/name: frontend}}

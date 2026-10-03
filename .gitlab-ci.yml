@@ -1,0 +1,196 @@
+# GitLab CI/CD: GitLab -> CI -> Docker build -> Container Registry (SWR) -> CCE (Kubernetes) -> ELB
+#
+# Required CI/CD variables (Settings > CI/CD > Variables; mark secrets Protected + Masked):
+#   REGISTRY               e.g. swr.<region>.<pardis-domain>/<organization>   (defaults to the GitLab registry)
+#   REGISTRY_USER / REGISTRY_PASSWORD   SWR login (long-term login command credentials)
+#   KUBECONFIG_STAGING / KUBECONFIG_PRODUCTION   (type: File) kubeconfig of the CCE clusters
+#   Per environment secrets (scoped to staging / production environments):
+#   DATABASE_PASSWORD REDIS_PASSWORD OBS_ACCESS_KEY OBS_SECRET_KEY JWT_SECRET INTERNAL_SERVICE_TOKEN [SMN_WEBHOOK_TOKEN]
+
+stages: [lint, test, build, docker, deploy]
+
+variables:
+  REGISTRY: ${CI_REGISTRY_IMAGE}
+  IMAGE_TAG: ${CI_COMMIT_SHORT_SHA}
+  PIP_CACHE_DIR: ${CI_PROJECT_DIR}/.cache/pip
+  npm_config_cache: ${CI_PROJECT_DIR}/.cache/npm
+  PYTHON_IMAGE: python:3.12-slim
+  NODE_IMAGE: node:22-alpine
+
+default:
+  interruptible: true
+
+.python:
+  image: ${PYTHON_IMAGE}
+  cache:
+    key: {files: [constraints.txt, requirements-dev.txt]}
+    paths: [.cache/pip]
+  before_script:
+    - pip install -q -c constraints.txt -r requirements-dev.txt
+
+.node:
+  image: ${NODE_IMAGE}
+  cache:
+    key: {files: [frontend/package-lock.json]}
+    paths: [.cache/npm]
+  before_script:
+    - cd frontend && npm ci --no-audit --no-fund
+
+# ------------------------------------------------------------------ lint
+lint:python:
+  extends: .python
+  stage: lint
+  script:
+    - ruff check .
+
+lint:frontend:
+  extends: .node
+  stage: lint
+  script:
+    - npm run lint
+
+lint:kubernetes:
+  stage: lint
+  image: {name: alpine/k8s:1.31.4, entrypoint: [""]}
+  script:
+    - wget -qO- https://github.com/yannh/kubeconform/releases/download/v0.7.0/kubeconform-linux-amd64.tar.gz | tar xz -C /usr/local/bin
+    - for o in local staging production; do kubectl kustomize infrastructure/kubernetes/overlays/$o | kubeconform -strict -summary -kubernetes-version 1.31.0 -; done
+
+# ------------------------------------------------------------------ test
+test:unit:
+  extends: .python
+  stage: test
+  script:
+    - pytest -q --cov --cov-report=term --cov-report=xml:coverage.xml --junitxml=report.xml
+  coverage: '/TOTAL.*\s+(\d+%)$/'
+  artifacts:
+    when: always
+    reports:
+      junit: report.xml
+      coverage_report: {coverage_format: cobertura, path: coverage.xml}
+
+test:integration-mysql:  # same suite against the RDS/DCS engines (MySQL 8 + Redis 7)
+  extends: .python
+  stage: test
+  services:
+    - name: mysql:8.0
+      alias: mysql
+      command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_0900_ai_ci"]
+    - name: redis:7.4-alpine
+      alias: redis
+  variables:
+    MYSQL_DATABASE: ecommerce_test
+    MYSQL_USER: ci
+    MYSQL_PASSWORD: ci-password
+    MYSQL_ROOT_PASSWORD: ci-root-password
+    TEST_DATABASE_URL: mysql+pymysql://ci:ci-password@mysql:3306/ecommerce_test?charset=utf8mb4
+    TEST_MIGRATION_DATABASE_URL: mysql+pymysql://root:ci-root-password@mysql:3306/migrations_test?charset=utf8mb4
+    TEST_REDIS_HOST: redis
+  script:
+    - |
+      python - <<'PY'
+      import time, pymysql
+      for _ in range(60):
+          try:
+              c = pymysql.connect(host="mysql", user="root", password="ci-root-password")
+              break
+          except Exception:
+              time.sleep(2)
+      c.cursor().execute("CREATE DATABASE IF NOT EXISTS migrations_test")
+      PY
+    - pytest -q --junitxml=report-mysql.xml
+  artifacts:
+    when: always
+    reports: {junit: report-mysql.xml}
+
+test:frontend:
+  extends: .node
+  stage: test
+  script:
+    - npm test
+
+# ------------------------------------------------------------------ build
+build:frontend:
+  extends: .node
+  stage: build
+  script:
+    - npm run build
+  artifacts:
+    paths: [frontend/dist]
+    expire_in: 1 day
+
+# ------------------------------------------------------------------ docker (build + push to SWR / registry)
+.docker:
+  stage: docker
+  image: docker:28
+  services: [docker:28-dind]
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+  before_script:
+    - echo "${REGISTRY_PASSWORD:-$CI_REGISTRY_PASSWORD}" | docker login -u "${REGISTRY_USER:-$CI_REGISTRY_USER}" --password-stdin "${REGISTRY%%/*}"
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_TAG
+
+docker:backend:
+  extends: .docker
+  script:
+    - docker build -f backend/Dockerfile -t "$REGISTRY/ecommerce-backend:$IMAGE_TAG" .
+    - docker push "$REGISTRY/ecommerce-backend:$IMAGE_TAG"
+
+docker:order-service:
+  extends: .docker
+  script:
+    - docker build -f order-service/Dockerfile -t "$REGISTRY/ecommerce-order-service:$IMAGE_TAG" .
+    - docker push "$REGISTRY/ecommerce-order-service:$IMAGE_TAG"
+
+docker:frontend:
+  extends: .docker
+  script:
+    - docker build -t "$REGISTRY/ecommerce-frontend:$IMAGE_TAG" frontend
+    - docker push "$REGISTRY/ecommerce-frontend:$IMAGE_TAG"
+
+# ------------------------------------------------------------------ deploy to CCE
+.deploy:
+  stage: deploy
+  image: {name: alpine/k8s:1.31.4, entrypoint: [""]}
+  interruptible: false
+  script:
+    - export KUBECONFIG="$KUBECONFIG_FILE"
+    - cd "infrastructure/kubernetes/overlays/$OVERLAY"
+    - kustomize edit set image
+        "ecommerce-backend=$REGISTRY/ecommerce-backend:$IMAGE_TAG"
+        "ecommerce-order-service=$REGISTRY/ecommerce-order-service:$IMAGE_TAG"
+        "ecommerce-frontend=$REGISTRY/ecommerce-frontend:$IMAGE_TAG"
+    - cd "$CI_PROJECT_DIR"
+    - |
+      NS=$(kubectl kustomize "infrastructure/kubernetes/overlays/$OVERLAY" | awk '/^kind: Namespace/{f=1} f&&/^  name:/{print $2; exit}')
+    - kubectl get namespace "$NS" >/dev/null 2>&1 || kubectl create namespace "$NS"
+    # Secret from protected CI variables (never stored in git)
+    - kubectl -n "$NS" create secret generic ecommerce-secrets
+        --from-literal=DATABASE_PASSWORD="$DATABASE_PASSWORD"
+        --from-literal=REDIS_PASSWORD="$REDIS_PASSWORD"
+        --from-literal=OBS_ACCESS_KEY="$OBS_ACCESS_KEY"
+        --from-literal=OBS_SECRET_KEY="$OBS_SECRET_KEY"
+        --from-literal=JWT_SECRET="$JWT_SECRET"
+        --from-literal=INTERNAL_SERVICE_TOKEN="$INTERNAL_SERVICE_TOKEN"
+        --from-literal=SMN_WEBHOOK_TOKEN="${SMN_WEBHOOK_TOKEN:-}"
+        --dry-run=client -o yaml | kubectl apply -f -
+    - scripts/k8s-deploy.sh "$OVERLAY" "$NS"
+
+deploy:staging:
+  extends: .deploy
+  variables: {OVERLAY: staging}
+  before_script: ['export KUBECONFIG_FILE="$KUBECONFIG_STAGING"']
+  environment: {name: staging, url: https://staging.shop.example.com}
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+deploy:production:
+  extends: .deploy
+  variables: {OVERLAY: production}
+  before_script: ['export KUBECONFIG_FILE="$KUBECONFIG_PRODUCTION"']
+  environment: {name: production, url: https://shop.example.com}
+  rules:
+    - if: $CI_COMMIT_TAG
+      when: manual   # production releases are tagged and approved manually

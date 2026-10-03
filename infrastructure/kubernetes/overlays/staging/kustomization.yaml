@@ -1,0 +1,29 @@
+# Staging: same topology as production, separate namespace, smaller footprint.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: ecommerce-staging
+resources:
+  - ../../base
+patches:
+  - target: {kind: Namespace, name: ecommerce}
+    patch: |-
+      - {op: replace, path: /metadata/name, value: ecommerce-staging}
+  - target: {kind: ConfigMap, name: ecommerce-config}
+    patch: |-
+      - {op: replace, path: /data/APP_ENV, value: staging}
+      - {op: replace, path: /data/DATABASE_HOST, value: REPLACE_ME_STAGING_RDS}
+      - {op: replace, path: /data/DATABASE_NAME, value: ecommerce_staging}
+      - {op: replace, path: /data/REDIS_HOST, value: REPLACE_ME_STAGING_DCS}
+      - {op: replace, path: /data/OBS_BUCKET_IMAGES, value: ecommerce-images-staging}
+      - {op: replace, path: /data/OBS_BUCKET_INVOICES, value: ecommerce-invoices-staging}
+      - {op: replace, path: /data/CORS_ORIGINS, value: "https://staging.shop.example.com"}
+  - target: {kind: ConfigMap, name: frontend-config}
+    patch: |-
+      - {op: replace, path: /data/APP_ENV, value: staging}
+  - target: {kind: Ingress, name: ecommerce}
+    patch: |-
+      - {op: replace, path: /spec/rules/0/host, value: staging.shop.example.com}
+images:
+  - {name: ecommerce-backend, newName: swr.REGION.pardiscloud.example/ORG/ecommerce-backend, newTag: latest}
+  - {name: ecommerce-order-service, newName: swr.REGION.pardiscloud.example/ORG/ecommerce-order-service, newTag: latest}
+  - {name: ecommerce-frontend, newName: swr.REGION.pardiscloud.example/ORG/ecommerce-frontend, newTag: latest}
