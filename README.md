@@ -1,4 +1,4 @@
-# Plan B Shop: cloud-ready e-commerce platform for Pardis Cloud (Phase 1)
+cloud-ready e-commerce platform for Pardis Cloud (Phase 1)
 
 A complete online store (storefront, checkout with payment simulation, PDF invoices, admin back office), built as
 **Plan B for Mall-Swarm** and designed from the start for the **Phase 1 single-VPC architecture**:
